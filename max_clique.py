@@ -1,6 +1,8 @@
 import os
 import numpy as np
-
+import cplex
+import networkx
+import matplotlib.pyplot as plt
 
 class Dataset():
     def __init__(self, dataset_path):
@@ -26,24 +28,45 @@ class Dataset():
                 _, vertex_from, vertex_to = line.split(' ')
                 vertex_from = int(vertex_from) - 1
                 vertex_to = int(vertex_to) - 1
-                self.graph[vertex_from, vertex_to] = 1
-                self.graph[vertex_to, vertex_from] = 1
-        self.graph = self.graph.tolist()
+                self.graph[vertex_from, vertex_to] = 2
+                self.graph[vertex_to, vertex_from] = 2
+        # self.graph = self.graph.tolist()
 
 
 class MaxCliqueProblemSolver():
-    def __init__(self, dataset : Dataset):
+    def __init__(self, dataset : Dataset, root_path : str):
         self.problem = cplex.Cplex()
-        # self.coefficients = [item for sublist in dataset.graph for item in sublist]
-        self.variables = [[str(i) + '_' + str(j) for j in range(dataset.number_of_vertices)] for i in range(dataset.number_of_vertices)]
-        # self.variables = [item for sublist in self.variables for item in sublist]
-        for variables in self.variables:
-            self.problem.variables.add(names= variables)
-        print(self.problem.variables)
+        self.variables = ['y' + str(i) for i in range(dataset.number_of_vertices)]
+        self.problem.variables.add(names = self.variables, types = [self.problem.variables.type.integer] * dataset.number_of_vertices)
+
+        for i, variable in enumerate(self.variables):
+            self.problem.variables.set_lower_bounds(i, 0.0)
+            self.problem.variables.set_upper_bounds(i, 1.0)
+
+        for i in range(dataset.number_of_vertices):
+            for j in range(dataset.number_of_vertices):
+                if ((dataset.graph[i, j] == 0) & (i != j)):
+                    self.problem.linear_constraints.add(
+                        lin_expr = [cplex.SparsePair(ind = [i, j], val = [1.0, 1.0])],
+                        rhs = [1.0],
+                        names = ["y_" + str(i) + "_" + str(j)],
+                        senses = ["L"]
+                    )
+
+        for variable in self.variables:
+                self.problem.objective.set_linear([(variable, 1.0)])
+        self.problem.objective.set_sense(self.problem.objective.sense.maximize)
+        self.problem.write(os.path.join(root_path, 'debug.lp'))
+        
+    def solve(self):
+        self.problem.solve()
+        return self.problem.solution.get_values()
 
 
 root_path = os.path.dirname(__file__)
 data_folder = os.path.join(root_path, "data")
 data_paths = [os.path.join(data_folder, name) for name in os.listdir(data_folder)]
-dataset = Dataset(data_paths[0])
-MaxCliqueProblemSolver(dataset)
+dataset = Dataset(data_paths[1])
+solver = MaxCliqueProblemSolver(dataset, root_path)
+descision = solver.solve()
+print(descision)
