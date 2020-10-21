@@ -4,6 +4,9 @@ import cplex
 import networkx
 import matplotlib.pyplot as plt
 import copy
+from tqdm import tqdm
+import time
+from func_timeout import func_timeout, FunctionTimedOut
 
 class Dataset():
     def __init__(self, dataset_path):
@@ -18,10 +21,10 @@ class Dataset():
 
     def parse_dataset(self, input):
         for line in input:
-            if (line[0] == 'c'):
-                if ('number of vertices' in line):
-                    self.number_of_vertices = int(line.split(' ')[5])
-                    break
+            if (line[0] == 'p'):
+                self.number_of_vertices = int(line.split(' ')[2])
+                print(self.number_of_vertices)
+                break
         self.graph = np.zeros(shape = [self.number_of_vertices, self.number_of_vertices])
         for line in input:
             line = line.replace('\n', '')
@@ -71,66 +74,91 @@ class BranchAndBound():
 
     @staticmethod
     def validate_solution(solution):
-        for i in solution:
-            if ((i != 1.0) & (i != 0.0)):
+        epsilon = 0.00001
+        for el in solution:
+            if ((np.abs(el - 1.0) > epsilon) & np.abs(el > epsilon)):
                 return False
         return True
 
     @staticmethod
     def solve(problem : cplex.Cplex, dataset : Dataset, used_candidates : list):
-        success = BranchAndBound.add_constraint(problem, dataset, used_candidates)
-        if not success:
-            return None
+        global best_solution, best_score
         problem.solve()
-        if (not problem.solution.get_status()):
-            return None
         descision = problem.solution.get_values()
-        if (BranchAndBound.validate_solution(problem.solution.get_values())):
-            return descision
-        obj_value = problem.solution.get_objective_value()
-        print(obj_value)
-        BranchAndBound.i += 1
-        if (BranchAndBound.i < 50):
-            b = BranchAndBound.solve(problem, dataset, used_candidates)
-        return b
-    
-    @staticmethod
-    def find_candidate(dataset : Dataset, used_candidates : list):
-        # for i  in range(dataset.number_of_vertices):
-        #     for j in range(i, dataset.number_of_vertices):
-        #         if (i != j):
-        #             if (dataset[i, j] == 0):
-        #                 for k in range(dataset.number_of_vertices):
-        #                     if ((i != j) & (j != k) & (i != k)):
-        #                         if ((dataset[i, k] == 0) & (dataset[i, j] == 0)):
-        #                             if (([i, j, k] not in used_candidates)):
-        #                                 return [i, j, k]
-        row_idxs, col_idxs = np.where(dataset.graph == 0)
-        for i, j in zip(row_idxs, col_idxs):
-            if (i != j):
-                for k in range(dataset.number_of_vertices):
-                    if ((j != k) & (i != k)):
-                        if ((dataset[i, k] == 0) & (dataset[i, j] == 0)):
-                            if (([i, j, k] not in used_candidates)):
-                                return [i, j, k]
-        return None
+        obj = problem.solution.get_objective_value()
+        if (obj <= best_score):
+            return None
+        if (problem.solution.get_status() is not 1):
+            return None
+        new_candidates_1 = BranchAndBound.add_constraint(problem, dataset, used_candidates, 1.0)
+        if (new_candidates_1 is not None):
+            b_1 = BranchAndBound.solve(problem, dataset, copy.deepcopy(new_candidates_1))
+            if (b_1 is not None):
+                problem.solve()
+                b_1_res = problem.solution.get_objective_value()
+                if (not BranchAndBound.validate_solution(b_1)):
+                    b_1 = descision
+                    b_1_res = obj
+                else:
+                    if (best_score < b_1_res):
+                        best_score = b_1_res
+                        best_solution = b_1
+                        print(best_score)
+            else:
+                b_1_res = obj
+                b_1 = descision
+            problem.linear_constraints.delete(problem.linear_constraints.get_num() - 1)
+        else:
+            b_1 = descision
+            b_1_res = obj
+
+        new_candidates_0 = BranchAndBound.add_constraint(problem, dataset, used_candidates, 0.0)
+        if (new_candidates_0 is not None):
+            b_0 = BranchAndBound.solve(problem, dataset, copy.deepcopy(new_candidates_0))
+            if (b_0 is not None):
+                problem.solve()
+                b_0_res = problem.solution.get_objective_value()
+                if (not BranchAndBound.validate_solution(b_0)):
+                    b_0 = descision
+                    b_0_res = obj
+                else:
+                    if (best_score < b_0_res):
+                        best_score = b_0_res
+                        best_solution = b_0
+                        print(best_score)
+            else:
+                b_0 = descision
+                b_0_res = obj
+            problem.linear_constraints.delete(problem.linear_constraints.get_num() - 1)
+        else:
+            b_0 = descision
+            b_0_res = obj
+
+        if (b_0_res < b_1_res):
+            return b_1
+        elif (b_0_res > b_1_res):
+            return b_0
+        else:
+            if (BranchAndBound.validate_solution(descision)):
+                return descision
+            else:
+                return None
 
     @staticmethod
-    def add_constraint(problem : cplex.Cplex, dataset : Dataset, used_candidates : list):
-        candidates = BranchAndBound.find_candidate(dataset, used_candidates)
-        print(candidates)
-        if (candidates):
-            used_candidates.append(candidates)
-            candidates_len = len(candidates)
-            problem.linear_constraints.add(
-                lin_expr = [cplex.SparsePair(candidates, val = [1.0] * candidates_len)],
-                rhs = [1.0],
-                names = ["c_" + str(np.random.randint(low = 10)) + "_" + str(np.random.randint(low = 10))],
-                senses = ["L"]
-            )
-            return True
-        else:
-            return False
+    def add_constraint(problem : cplex.Cplex, dataset : Dataset, used_candidates : list, constr_val):
+        for i in range(dataset.number_of_vertices):
+            if (i not in used_candidates):
+                used_candidates.append(i)
+                indx = problem.linear_constraints.add(
+                    lin_expr = [cplex.SparsePair([i], val = [1.0])],
+                    rhs = [constr_val],
+                    names = ["c_" + str(np.random.randint(low = 10)) + "_" + str(np.random.randint(low = 10))],
+                    senses = ["G"] if (constr_val == 1.0) else ["L"] 
+                )
+                # print("Added {}".format(indx))
+                used_candidates.append(i)
+                return used_candidates
+        return None
 
 class BranchAndBoundSolver():
     def __init__(self, dataset : np.array, root_path : str):
@@ -148,11 +176,18 @@ class BranchAndBoundSolver():
         for variable in variables:
                 self.base_problem.objective.set_linear([(variable, 1.0)])
 
+        print("Start")
         lin_exprs = []
-        for i in range(dataset.number_of_vertices):
-            for j in range(dataset.number_of_vertices):
-                if ((dataset.graph[i, j] == 0) & (i != j)):
-                    lin_exprs.append(cplex.SparsePair(ind = [i, j], val = [1.0, 1.0]))
+        rows, cols = np.where(dataset.graph == 0)
+        for i,j in zip(rows, cols):
+            if (i != j):
+                lin_exprs.append(cplex.SparsePair(ind = [int(i), int(j)], val = [1.0, 1.0]))
+                for k in range(dataset.number_of_vertices):
+                    if ((i != k) & (j != k)):
+                        if (dataset[i, j] + dataset[i, k] + dataset[j, k] == 0):
+                            lin_exprs.append(cplex.SparsePair(ind = [int(i), int(j), int(k)], val = [1.0, 1.0, 1.0]))
+
+        print("Stop")
 
         lin_exprs_len = len(lin_exprs)
         self.base_problem.linear_constraints.add(
@@ -163,14 +198,55 @@ class BranchAndBoundSolver():
         )
 
         self.base_problem.objective.set_sense(self.base_problem.objective.sense.maximize)
-    
+
     def __call__(self):
         return(BranchAndBound.solve(self.base_problem, self.dataset, self.used_candidates))
+    
+    # def __name__(self):
+    #     return "BranchAndBoundSolver"
+
 
 
 root_path = os.path.dirname(__file__)
 data_folder = os.path.join(root_path, "data")
 data_paths = [os.path.join(data_folder, name) for name in os.listdir(data_folder)]
-dataset = Dataset(data_paths[1])
-solver = BranchAndBoundSolver(dataset, root_path)
-print(solver())
+
+descision_folder = os.path.join(root_path, "results")
+if not os.path.isdir(descision_folder):
+    os.makedirs(descision_folder)
+
+global best_solution, best_score
+for path in data_paths[5:]:
+    graph_name = path.split(os.sep)[-1]
+    print(graph_name)
+    res_path = os.path.join(descision_folder, graph_name + '.txt')
+    dataset = Dataset(path)
+    best_solution = 0
+    best_score = 0
+    solver = BranchAndBoundSolver(dataset, root_path)
+    start_time = time.time()
+    try:
+        doitReturnValue = func_timeout(1800, solver, args=())
+    except Exception as e:
+        print(e)
+    total_time = time.time() - start_time
+    print(total_time)
+
+    def save_results(descision, calc_time, n_vertices, path):
+        with open(path, 'w+') as f:
+            res_string = "N vertices: {} \n Calculation time: {} seconds \n Descision: {}".format(n_vertices, calc_time, descision)
+            f.write(res_string)
+
+    def check_if_clique(descision, graph):
+        for i in descision:
+            for j in descision:
+                if (i != j):
+                    if (graph[int(i), int(j)] != 1):
+                        return False
+        return True
+
+    try:
+        print(check_if_clique(best_solution, dataset.graph))
+        save_results(best_solution, total_time, best_score, res_path)
+    except Exception as e:
+        print(e)
