@@ -1,8 +1,6 @@
 import os
 import numpy as np
 import cplex
-import networkx
-import matplotlib.pyplot as plt
 import copy
 from tqdm import tqdm
 import time
@@ -206,47 +204,47 @@ class BranchAndBoundSolver():
     #     return "BranchAndBoundSolver"
 
 
+if __name__ == "__main__":
+    root_path = os.path.dirname(__file__)
+    data_folder = os.path.join(root_path, "data")
+    data_paths = [os.path.join(data_folder, name) for name in os.listdir(data_folder)]
 
-root_path = os.path.dirname(__file__)
-data_folder = os.path.join(root_path, "data")
-data_paths = [os.path.join(data_folder, name) for name in os.listdir(data_folder)]
+    descision_folder = os.path.join(root_path, "results")
+    if not os.path.isdir(descision_folder):
+        os.makedirs(descision_folder)
 
-descision_folder = os.path.join(root_path, "results")
-if not os.path.isdir(descision_folder):
-    os.makedirs(descision_folder)
+    global best_solution, best_score
+    for path in data_paths[5:]:
+        graph_name = path.split(os.sep)[-1]
+        print(graph_name)
+        res_path = os.path.join(descision_folder, graph_name + '.txt')
+        dataset = Dataset(path)
+        best_solution = 0
+        best_score = 0
+        solver = BranchAndBoundSolver(dataset, root_path)
+        start_time = time.time()
+        try:
+            doitReturnValue = func_timeout(1800, solver, args=())
+        except Exception as e:
+            print(e)
+        total_time = time.time() - start_time
+        print(total_time)
 
-global best_solution, best_score
-for path in data_paths[5:]:
-    graph_name = path.split(os.sep)[-1]
-    print(graph_name)
-    res_path = os.path.join(descision_folder, graph_name + '.txt')
-    dataset = Dataset(path)
-    best_solution = 0
-    best_score = 0
-    solver = BranchAndBoundSolver(dataset, root_path)
-    start_time = time.time()
-    try:
-        doitReturnValue = func_timeout(1800, solver, args=())
-    except Exception as e:
-        print(e)
-    total_time = time.time() - start_time
-    print(total_time)
+        def save_results(descision, calc_time, n_vertices, path):
+            with open(path, 'w+') as f:
+                res_string = "N vertices: {} \n Calculation time: {} seconds \n Descision: {}".format(n_vertices, calc_time, descision)
+                f.write(res_string)
 
-    def save_results(descision, calc_time, n_vertices, path):
-        with open(path, 'w+') as f:
-            res_string = "N vertices: {} \n Calculation time: {} seconds \n Descision: {}".format(n_vertices, calc_time, descision)
-            f.write(res_string)
+        def check_if_clique(descision, graph):
+            for i in descision:
+                for j in descision:
+                    if (i != j):
+                        if (graph[int(i), int(j)] != 1):
+                            return False
+            return True
 
-    def check_if_clique(descision, graph):
-        for i in descision:
-            for j in descision:
-                if (i != j):
-                    if (graph[int(i), int(j)] != 1):
-                        return False
-        return True
-
-    try:
-        print(check_if_clique(best_solution, dataset.graph))
-        save_results(best_solution, total_time, best_score, res_path)
-    except Exception as e:
-        print(e)
+        try:
+            print(check_if_clique(best_solution, dataset.graph))
+            save_results(best_solution, total_time, best_score, res_path)
+        except Exception as e:
+            print(e)
